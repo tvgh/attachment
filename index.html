@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>图床画廊</title>
+    <title>图床文件浏览器</title>
     <style>
         :root {
             --bg-color: #1a1a1a;
             --card-bg: #2d2d2d;
             --text-color: #e0e0e0;
+            --accent-color: #4a90e2;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -17,46 +18,91 @@
             margin: 0;
             padding: 20px;
         }
-        h1 { text-align: center; margin-bottom: 30px; }
-        
+
+        /* 顶部导航栏 */
+        .header {
+            max-width: 1200px;
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #333;
+        }
+        .btn {
+            padding: 8px 16px;
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .btn:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+        .breadcrumb {
+            font-size: 16px;
+            color: #aaa;
+        }
+        .breadcrumb span {
+            color: white;
+            font-weight: bold;
+        }
+
         /* 网格布局 */
         .gallery {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
             gap: 20px;
             max-width: 1200px;
             margin: 0 auto;
         }
 
-        /* 图片卡片样式 */
+        /* 通用卡片样式 */
         .card {
             background: var(--card-bg);
             border-radius: 8px;
             overflow: hidden;
-            transition: transform 0.2s;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            transition: transform 0.2s, box-shadow 0.2s;
             cursor: pointer;
             display: flex;
             flex-direction: column;
+            position: relative;
         }
         .card:hover {
             transform: translateY(-5px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.4);
         }
-        
+
+        /* 文件夹卡片特有样式 */
+        .card.folder-card {
+            border: 1px solid #444;
+            align-items: center;
+            justify-content: center;
+            padding: 30px 10px;
+        }
+        .folder-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+
         /* 图片容器 */
         .img-container {
             width: 100%;
-            height: 200px; /* 固定高度，裁剪 */
-            overflow: hidden;
+            aspect-ratio: 1 / 1; /* 正方形裁剪 */
             background: #333;
             display: flex;
             align-items: center;
             justify-content: center;
+            overflow: hidden;
         }
         .img-container img {
             width: 100%;
             height: 100%;
-            object-fit: cover; /* 保持比例填充 */
+            object-fit: cover;
             transition: opacity 0.3s;
         }
 
@@ -64,26 +110,34 @@
         .filename {
             padding: 10px;
             font-size: 12px;
-            color: #aaa;
+            color: #ccc;
             text-align: center;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            width: 100%;
+            box-sizing: border-box;
         }
 
-        /* 加载动画 */
-        .loading {
+        /* 加载与错误提示 */
+        .status-msg {
             text-align: center;
             margin-top: 50px;
-            font-size: 18px;
+            font-size: 16px;
+            grid-column: 1 / -1;
         }
     </style>
 </head>
 <body>
 
-    <h1>Attachment Gallery</h1>
-    <div id="loading" class="loading">正在加载图片列表...</div>
-    <div id="gallery" class="gallery"></div>
+    <div class="header">
+        <button id="backBtn" class="btn" onclick="goBack()" disabled>⬅ 返回上一级</button>
+        <div class="breadcrumb" id="breadcrumb">当前路径: /</div>
+    </div>
+
+    <div id="gallery" class="gallery">
+        <div class="status-msg">正在初始化...</div>
+    </div>
 
     <script>
         // ================= 配置区域 =================
@@ -91,53 +145,79 @@
             username: 'tvgh',       // 你的 GitHub 用户名
             repo: 'attachment',     // 你的仓库名
             branch: 'main',         // 分支名
-            path: 'piclist'         // 图片存放的文件夹路径（根据你之前的链接，是 piclist）
+            rootPath: ''            // 初始根目录，如果你想从根开始看，留空 ''；如果想直接看 piclist，填 'piclist'
         };
         // ===========================================
 
+        let currentPath = config.rootPath;
         const gallery = document.getElementById('gallery');
-        const loading = document.getElementById('loading');
+        const backBtn = document.getElementById('backBtn');
+        const breadcrumb = document.getElementById('breadcrumb');
 
-        // 构建 API 地址
-        const apiUrl = `https://api.github.com/repos/${config.username}/${config.repo}/contents/${config.path}?ref=${config.branch}`;
+        // 主函数：加载指定路径的内容
+        async function loadPath(path) {
+            currentPath = path;
+            updateUIState();
+            
+            gallery.innerHTML = '<div class="status-msg">正在加载...</div>';
 
-        async function loadImages() {
+            const apiUrl = `https://api.github.com/repos/${config.username}/${config.repo}/contents/${path}?ref=${config.branch}`;
+
             try {
                 const response = await fetch(apiUrl);
-                if (!response.ok) throw new Error(`API 请求失败: ${response.status}`);
+                if (!response.ok) {
+                    if(response.status === 403) throw new Error("API 访问频率超限，请稍后再试");
+                    if(response.status === 404) throw new Error("路径不存在或仓库未公开");
+                    throw new Error(`错误: ${response.status}`);
+                }
                 
                 const data = await response.json();
-                
-                // 过滤出图片文件 (jpg, png, gif, webp, jpeg, svg)
-                const images = data.filter(file => {
-                    return file.type === 'file' && /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(file.name);
-                });
-
-                loading.style.display = 'none';
-                renderGallery(images);
+                renderContent(data);
 
             } catch (error) {
-                loading.innerText = '加载失败，请检查仓库是否公开，或者API调用次数是否超限。';
+                gallery.innerHTML = `<div class="status-msg" style="color: #ff6b6b">${error.message}</div>`;
                 console.error(error);
             }
         }
 
-        function renderGallery(images) {
-            if (images.length === 0) {
-                loading.style.display = 'block';
-                loading.innerText = '该目录下没有找到图片。';
+        // 渲染内容（文件夹 + 图片）
+        function renderContent(data) {
+            gallery.innerHTML = '';
+
+            // 1. 分离文件夹和文件
+            const folders = data.filter(item => item.type === 'dir');
+            const files = data.filter(item => item.type === 'file');
+
+            // 2. 过滤出图片文件
+            const images = files.filter(file => /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(file.name));
+
+            if (folders.length === 0 && images.length === 0) {
+                gallery.innerHTML = '<div class="status-msg">此文件夹为空</div>';
                 return;
             }
 
+            // 3. 渲染文件夹
+            folders.forEach(folder => {
+                const card = document.createElement('div');
+                card.className = 'card folder-card';
+                card.onclick = () => loadPath(folder.path); // 点击进入文件夹
+                
+                card.innerHTML = `
+                    <div class="folder-icon">📁</div>
+                    <div class="filename">${folder.name}</div>
+                `;
+                gallery.appendChild(card);
+            });
+
+            // 4. 渲染图片
             images.forEach(img => {
-                // 使用 jsDelivr CDN 加速显示，避免 raw.githubusercontent 速度慢
-                const cdnUrl = `https://cdn.jsdelivr.net/gh/${config.username}/${config.repo}@${config.branch}/${config.path}/${img.name}`;
+                // 使用 jsDelivr CDN 加速
+                // 注意：jsDelivr 的路径需要对 path 进行编码处理，但通常简单路径直接拼接即可
+                const cdnUrl = `https://cdn.jsdelivr.net/gh/${config.username}/${config.repo}@${config.branch}/${img.path}`;
                 
                 const card = document.createElement('div');
                 card.className = 'card';
-                
-                // 点击在新标签页打开原图
-                card.onclick = () => window.open(cdnUrl, '_blank');
+                card.onclick = () => window.open(cdnUrl, '_blank'); // 点击查看大图
 
                 card.innerHTML = `
                     <div class="img-container">
@@ -145,13 +225,39 @@
                     </div>
                     <div class="filename" title="${img.name}">${img.name}</div>
                 `;
-                
                 gallery.appendChild(card);
             });
         }
 
-        // 开始加载
-        loadImages();
+        // 更新导航栏状态
+        function updateUIState() {
+            // 更新面包屑
+            breadcrumb.innerHTML = `当前路径: <span>${currentPath === '' ? '根目录' : currentPath}</span>`;
+            
+            // 更新返回按钮状态
+            if (currentPath === '' || currentPath === config.rootPath) {
+                backBtn.disabled = true;
+            } else {
+                backBtn.disabled = false;
+            }
+        }
+
+        // 返回上一级逻辑
+        function goBack() {
+            if (currentPath === '' || currentPath === config.rootPath) return;
+
+            // 移除路径的最后一部分
+            // 例如: "piclist/2023/01" -> split -> ["piclist", "2023", "01"] -> slice -> ["piclist", "2023"] -> join -> "piclist/2023"
+            const parts = currentPath.split('/');
+            parts.pop(); 
+            const parentPath = parts.join('/');
+            
+            loadPath(parentPath);
+        }
+
+        // 初始加载
+        loadPath(config.rootPath);
+
     </script>
 </body>
 </html>
