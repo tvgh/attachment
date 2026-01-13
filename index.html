@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图床画廊</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --card-bg: #2d2d2d;
+            --text-color: #e0e0e0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+        }
+        h1 { text-align: center; margin-bottom: 30px; }
+        
+        /* 网格布局 */
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* 图片卡片样式 */
+        .card {
+            background: var(--card-bg);
+            border-radius: 8px;
+            overflow: hidden;
+            transition: transform 0.2s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+        }
+        
+        /* 图片容器 */
+        .img-container {
+            width: 100%;
+            height: 200px; /* 固定高度，裁剪 */
+            overflow: hidden;
+            background: #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .img-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* 保持比例填充 */
+            transition: opacity 0.3s;
+        }
+
+        /* 文件名 */
+        .filename {
+            padding: 10px;
+            font-size: 12px;
+            color: #aaa;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* 加载动画 */
+        .loading {
+            text-align: center;
+            margin-top: 50px;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Attachment Gallery</h1>
+    <div id="loading" class="loading">正在加载图片列表...</div>
+    <div id="gallery" class="gallery"></div>
+
+    <script>
+        // ================= 配置区域 =================
+        const config = {
+            username: 'tvgh',       // 你的 GitHub 用户名
+            repo: 'attachment',     // 你的仓库名
+            branch: 'main',         // 分支名
+            path: 'piclist'         // 图片存放的文件夹路径（根据你之前的链接，是 piclist）
+        };
+        // ===========================================
+
+        const gallery = document.getElementById('gallery');
+        const loading = document.getElementById('loading');
+
+        // 构建 API 地址
+        const apiUrl = `https://api.github.com/repos/${config.username}/${config.repo}/contents/${config.path}?ref=${config.branch}`;
+
+        async function loadImages() {
+            try {
+                const response = await fetch(apiUrl);
+                if (!response.ok) throw new Error(`API 请求失败: ${response.status}`);
+                
+                const data = await response.json();
+                
+                // 过滤出图片文件 (jpg, png, gif, webp, jpeg, svg)
+                const images = data.filter(file => {
+                    return file.type === 'file' && /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(file.name);
+                });
+
+                loading.style.display = 'none';
+                renderGallery(images);
+
+            } catch (error) {
+                loading.innerText = '加载失败，请检查仓库是否公开，或者API调用次数是否超限。';
+                console.error(error);
+            }
+        }
+
+        function renderGallery(images) {
+            if (images.length === 0) {
+                loading.style.display = 'block';
+                loading.innerText = '该目录下没有找到图片。';
+                return;
+            }
+
+            images.forEach(img => {
+                // 使用 jsDelivr CDN 加速显示，避免 raw.githubusercontent 速度慢
+                const cdnUrl = `https://cdn.jsdelivr.net/gh/${config.username}/${config.repo}@${config.branch}/${config.path}/${img.name}`;
+                
+                const card = document.createElement('div');
+                card.className = 'card';
+                
+                // 点击在新标签页打开原图
+                card.onclick = () => window.open(cdnUrl, '_blank');
+
+                card.innerHTML = `
+                    <div class="img-container">
+                        <img src="${cdnUrl}" loading="lazy" alt="${img.name}">
+                    </div>
+                    <div class="filename" title="${img.name}">${img.name}</div>
+                `;
+                
+                gallery.appendChild(card);
+            });
+        }
+
+        // 开始加载
+        loadImages();
+    </script>
+</body>
+</html>
